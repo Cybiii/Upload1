@@ -1,18 +1,25 @@
-// FileUploader.tsx
 import React from 'react';
 
-const FileUploader: React.FC = () => {
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+interface FileUploaderProps {
+  onFileUpload: (data: any) => void; // Prop to handle the uploaded file data
+}
+
+const FileUploader: React.FC<FileUploaderProps> = ({ onFileUpload }) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      // Handle file upload logic here
-      console.log("Uploaded file:", file);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const jsonData = JSON.parse(reader.result as string);
+        onFileUpload(jsonData); // Pass the JSON data to MainContainer
+      };
+      reader.readAsText(file);
     }
   };
 
   return (
-    <div className="bg-white mx-auto p-4 rounded-lg shadow-lg mb-4">
-      <h2 className="text-3xl font-semibold mb-4">Upload JSON</h2> {/* Change text-2xl to text-xl */}
+    <div className="bg-white p-4 rounded-lg shadow-lg mb-4 mx-auto ">
+      <h2 className="text-2xl font-semibold mb-4 ">Upload your rrweb JSON file here:</h2>
       <input
         type="file"
         accept=".json"

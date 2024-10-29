@@ -1,4 +1,4 @@
-import { EventType, incrementalData, IncrementalSource} from "./index";
+import { EventType, incrementalData, IncrementalSource } from "./index";
 import file from "./data.json";
 
 interface Noded {
@@ -7,12 +7,14 @@ interface Noded {
 }
 
 interface SnapshotData {
-  subnode?: Noded;
+  node?: Noded;
   href?: string;
   initialOffset?: {
     left: number;
     top: number;
   };
+  subnode?: Noded;
+  [key: string]: any;
 }
 
 interface Snapshot {
@@ -24,14 +26,22 @@ interface Snapshot {
   delay?: number;
 }
 
+interface EventSummary {
+  type: string;
+  timestampStart: number;
+  timestampEnd?: number;
+  details?: any;
+}
+
 const snapshots: Snapshot[] = file.data.snapshots || [];
 const timestart = snapshots[0].timestamp;
-let window = snapshots[0].windowId;
+let windowId = snapshots[0].windowId;
 
-function convertMsToTime(milliseconds: number): string {
+const eventSummaries: EventSummary[] = [];
+
+function formatTimestamp(milliseconds: number): string {
   const totalSeconds = Math.floor(milliseconds / 1000);
   const minutes = Math.floor(totalSeconds / 60);
-
   const seconds = totalSeconds % 60;
 
   const formattedMinutes = minutes.toString().padStart(2, "0");
@@ -40,7 +50,48 @@ function convertMsToTime(milliseconds: number): string {
   return `${formattedMinutes}:${formattedSeconds}`;
 }
 
-function handleEvent(snapshot: Snapshot | undefined) {
+// Utility function to limit data size
+function limitDataSize(data: any, maxLength = 1000): any {
+  if (typeof data === "string") {
+    return data.length > maxLength ? data.substring(0, maxLength) + "..." : data;
+  } else if (Array.isArray(data)) {
+    return data.slice(0, 10).map((item) => limitDataSize(item, maxLength));
+  } else if (typeof data === "object" && data !== null) {
+    const limitedData: any = {};
+    let count = 0;
+    for (const key in data) {
+      if (count >= 10) {
+        limitedData["..."] = "Truncated additional properties";
+        break;
+      }
+      limitedData[key] = limitDataSize(data[key], maxLength);
+      count++;
+    }
+    return limitedData;
+  } else {
+    return data;
+  }
+}
+
+// Process snapshots
+for (let i = 0; i < snapshots.length; i++) {
+  const snapshot = snapshots[i];
+  const relativeTimestamp = snapshot.timestamp - timestart;
+
+  // Handle URL changes
+  if (snapshot.windowId !== windowId) {
+    windowId = snapshot.windowId;
+    eventSummaries.push({
+      type: "URL Visited",
+      timestampStart: relativeTimestamp,
+      details: { url: snapshot.data.href || "Unknown URL" },
+    });
+  }
+
+  handleEvent(snapshot, relativeTimestamp);
+}
+
+function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
   if (!snapshot) {
     console.log("No snapshot detected");
     return;
@@ -48,134 +99,162 @@ function handleEvent(snapshot: Snapshot | undefined) {
 
   switch (snapshot.type) {
     case EventType.DomContentLoaded:
-      console.log("DOM content loaded");
-      DOMLoadData(snapshot.data as unknown);
+      eventSummaries.push({
+        type: "DOM Content Loaded",
+        timestampStart: relativeTimestamp,
+      });
       break;
 
     case EventType.Load:
-      console.log("Page load");
-      PageloadData(snapshot.data as unknown);
+      eventSummaries.push({
+        type: "Page Load",
+        timestampStart: relativeTimestamp,
+      });
       break;
 
     case EventType.FullSnapshot:
-      console.log("Full snapshot");
-      FullSnapshotData(snapshot.data as any);
+      eventSummaries.push({
+        type: "Full Snapshot",
+        timestampStart: relativeTimestamp,
+      });
       break;
 
     case EventType.IncrementalSnapshot:
-      console.log("Incremental snapshot");
-      IncrementalData(snapshot.data as incrementalData);
+      handleIncrementalData(snapshot.data as incrementalData, relativeTimestamp);
       break;
 
     case EventType.Meta:
-      console.log("Meta event");
-      MetaEventData(
-        snapshot.data as { href: string; width: number; height: number }
-      );
+      eventSummaries.push({
+        type: "Meta Event",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(snapshot.data),
+      });
       break;
 
     case EventType.Custom:
-      console.log("Custom event");
-      CustomEventData(snapshot.data as { tag: string; payload: unknown });
+      eventSummaries.push({
+        type: "Custom Event",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(snapshot.data),
+      });
       break;
 
     case EventType.Plugin:
-      console.log("Plugin event");
+      eventSummaries.push({
+        type: "Plugin Event",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(snapshot.data),
+      });
       break;
 
     default:
-      console.log("Unknown event");
+      eventSummaries.push({
+        type: "Unknown Event",
+        timestampStart: relativeTimestamp,
+      });
   }
 }
 
-function DOMLoadData(data: unknown) {
-  console.log("DOM Load Data:", data);
-}
+function handleIncrementalData(data: incrementalData, relativeTimestamp: number) {
+  const lastEvent = eventSummaries[eventSummaries.length - 1];
 
-function PageloadData(data: unknown) {
-  console.log("Page Load Data:", data);
-}
-
-function FullSnapshotData(data: {
-  subnode: Noded;
-  initialOffset: { top: number; left: number };
-}) {
-    return;
-}
-
-function IncrementalData(data: incrementalData) {
   switch (data.source) {
     case IncrementalSource.Mutation:
-      console.log("Mutation");
-
+      eventSummaries.push({
+        type: "DOM Mutation",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(data),
+      });
       break;
+
     case IncrementalSource.MouseMove:
-      console.log("Mouse Move Data source:", data.source);
-      break;
-    case IncrementalSource.MouseInteraction:
-      console.log("Mouse Interaction Data id:", data.id);
-      break;
-    case IncrementalSource.Scroll:
-      console.log("Scroll Data:", data);
-      break;
-    case IncrementalSource.ViewportResize:
-      console.log("Viewport Resize Data:", data);
-      break;
-    case IncrementalSource.Input:
-      console.log("Input Data:", data);
-      break;
     case IncrementalSource.TouchMove:
-      console.log("Touch Move Data:", data);
+      if (lastEvent && lastEvent.type === "Mouse Movement") {
+        lastEvent.timestampEnd = relativeTimestamp;
+      } else {
+        eventSummaries.push({
+          type: "Mouse Movement",
+          timestampStart: relativeTimestamp,
+        });
+      }
       break;
-    case IncrementalSource.MediaInteraction:
-      console.log("Media Interaction Data:", data);
+
+    case IncrementalSource.MouseInteraction:
+      eventSummaries.push({
+        type: "Mouse Interaction",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize({ elementId: data.id, interactionType: data.type }),
+      });
       break;
-    case IncrementalSource.StyleSheetRule:
-      console.log("Style Sheet Rule", data.id);
+
+    case IncrementalSource.Scroll:
+      if (lastEvent && lastEvent.type === "Scroll") {
+        lastEvent.timestampEnd = relativeTimestamp;
+      } else {
+        eventSummaries.push({
+          type: "Scroll",
+          timestampStart: relativeTimestamp,
+        });
+      }
       break;
-    case IncrementalSource.CanvasMutation:
-      console.log("Canvas Mutation Data:", data);
+
+    case IncrementalSource.ViewportResize:
+      eventSummaries.push({
+        type: "Viewport Resize",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(data),
+      });
       break;
-    case IncrementalSource.Font:
-      console.log("Font Data:", data);
+
+    case IncrementalSource.Input:
+      eventSummaries.push({
+        type: "Text Input",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize(data),
+      });
       break;
-    case IncrementalSource.Drag:
-      console.log("Drag Data:", data);
-      break;
-    case IncrementalSource.StyleDeclaration:
-      console.log("Style Declaration Data:", data);
-      break;
-    case IncrementalSource.AdoptedStyleSheet:
-      console.log("Adopted Style Sheet Data:", data);
-      break;
+
+    // Add more cases as needed for other event types
+
     default:
-      console.log("Unknown Incremental Data Source");
+      eventSummaries.push({
+        type: "Other Incremental Event",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize({ source: data.source, ...data }),
+      });
   }
 }
 
-function MetaEventData(data: { href: string }) {
-  console.log("Redirected to Link");
+function outputEventSummary() {
+  eventSummaries.forEach((event) => {
+    const startTime = formatTimestamp(event.timestampStart);
+    const endTime = event.timestampEnd
+      ? formatTimestamp(event.timestampEnd)
+      : null;
+
+    if (event.type === "URL Visited") {
+      console.log(`Timestamp: ${startTime}`);
+      console.log(`URL Visited: ${event.details.url}`);
+    } else if (endTime) {
+      console.log(`Timestamp: ${startTime} - ${endTime}`);
+      console.log(`${event.type}`);
+    } else {
+      console.log(`Timestamp: ${startTime}`);
+      console.log(`${event.type}`);
+    }
+
+    if (event.details) {
+      for (const [key, value] of Object.entries(event.details)) {
+        console.log(
+          `${key.charAt(0).toUpperCase() + key.slice(1)}: ${
+            typeof value === "object" ? JSON.stringify(value) : value
+          }`
+        );
+      }
+    }
+    console.log(""); // Add an empty line between events
+  });
 }
 
-function CustomEventData(data: { tag: string; payload: unknown }) {
-  console.log("Tag:", data.tag);
-}
-
-function PluginEventData(data: { plugin: string; payload: unknown }) {
-  console.log("Plugin Event Data:");
-  console.log("Plugin:", data.plugin);
-}
-
-// Process snapshots
-snapshots.forEach((snapshot) => {
-
-  
-    console.log(`Timestamp: ${convertMsToTime(snapshot.timestamp - timestart)}`);
-  handleEvent(snapshot);
-
-  if (snapshot.windowId !== window) {
-    window = snapshot.windowId;
-    console.log(`URL visited ${window}`);
-  }
-  console.log(``);
-});
+// After processing all snapshots, output the summarized events
+outputEventSummary();
