@@ -1,8 +1,8 @@
-// FileUploader.tsx
 import React from 'react';
+import { Snapshot } from '../../types';
 
 interface FileUploaderProps {
-  onFileUpload: (data: any) => void; // Prop to handle the uploaded file data
+  onFileUpload: (data: Snapshot[]) => void;
 }
 
 const FileUploader: React.FC<FileUploaderProps> = ({ onFileUpload }) => {
@@ -15,6 +15,8 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileUpload }) => {
           const jsonData = JSON.parse(reader.result as string);
           if (jsonData.data && jsonData.data.snapshots) {
             onFileUpload(jsonData.data.snapshots);
+          } else if (Array.isArray(jsonData)) {
+            onFileUpload(jsonData);
           } else {
             alert('Invalid rrweb file format.');
           }

@@ -1,12 +1,12 @@
-// MainContainer.tsx
 import React, { useState } from "react";
-import StepsChat from "./ChatBox";
-import FileUploader from "./FileUpload";
+import StepsChat from "../StepsChat";
+import FileUploader from "../FileUploader";
+import { Snapshot } from '../../types';
 
 const MainContainer: React.FC = () => {
-  const [snapshots, setSnapshots] = useState<any[]>([]);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
 
-  const handleFileUpload = (data: any) => {
+  const handleFileUpload = (data: Snapshot[]) => {
     setSnapshots(data || []);
   };
 
