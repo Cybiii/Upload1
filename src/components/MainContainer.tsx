@@ -1,20 +1,23 @@
+// MainContainer.tsx
 import React, { useState } from "react";
-import RecipeChat from "./ChatBox";
+import StepsChat from "./ChatBox";
 import FileUploader from "./FileUpload";
 
 const MainContainer: React.FC = () => {
   const [snapshots, setSnapshots] = useState<any[]>([]);
 
   const handleFileUpload = (data: any) => {
-    setSnapshots(data.data.snapshots || []);
+    setSnapshots(data || []);
   };
 
   return (
-    <div className="flex justify-center items-start space-x-4 p-16">
-      <div className="flex flex-col space-y-4">
-        <FileUploader onFileUpload={handleFileUpload} />
-        <RecipeChat steps={snapshots} />
-      </div>
+    <div className="flex flex-col items-center p-8">
+      <FileUploader onFileUpload={handleFileUpload} />
+      {snapshots.length > 0 ? (
+        <StepsChat steps={snapshots} />
+      ) : (
+        <p>Please upload an rrweb JSON file to see the event summary.</p>
+      )}
     </div>
   );
 };

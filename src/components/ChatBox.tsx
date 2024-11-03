@@ -3,26 +3,35 @@ import { EventType, incrementalData, IncrementalSource } from "../../index";
 
 interface Noded {
   id: number;
+  tagName?: string;
+  attributes?: { [key: string]: string };
   childNodes?: Noded[];
+  textContent?: string;
 }
 
 interface SnapshotData {
-  subnode?: Noded;
+  node?: Noded;
   href?: string;
   initialOffset?: {
     left: number;
     top: number;
   };
-  node?: Noded;
+  text?: string;
+  source?: number;
+  id?: number;
+  type?: number;
+  x?: number;
+  y?: number;
+  adds?: any[];
+  removes?: any[];
   [key: string]: any;
 }
 
 interface Snapshot {
   windowId: string;
-  type?: EventType;
+  type: EventType;
   data: SnapshotData;
   timestamp: number;
-  seen?: number;
   delay?: number;
 }
 
@@ -31,6 +40,7 @@ interface EventSummary {
   timestampStart: number;
   timestampEnd?: number;
   details?: any;
+  children?: EventSummary[];
 }
 
 interface StepsChatProps {
@@ -39,30 +49,51 @@ interface StepsChatProps {
 
 const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
   const [eventSummaries, setEventSummaries] = useState<EventSummary[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (steps.length === 0) return;
 
     const timestart = steps[0]?.timestamp || 0;
-    let windowId = steps[0]?.windowId || '';
+    let mouseMovementStarted = false;
     const summaries: EventSummary[] = [];
 
     for (let i = 0; i < steps.length; i++) {
       const snapshot = steps[i];
       const relativeTimestamp = snapshot.timestamp - timestart;
 
-      // Handle URL changes
-      if (snapshot.windowId !== windowId) {
-        windowId = snapshot.windowId;
+      // Handle page navigations
+      if (snapshot.type === EventType.Meta && snapshot.data.href) {
         summaries.push({
-          type: "URL Visited",
+          type: "Page Navigation",
           timestampStart: relativeTimestamp,
-          details: { url: snapshot.data.href || "Unknown URL" },
+          details: { url: snapshot.data.href },
         });
       }
 
+      // Handle other events
       handleEvent(snapshot, relativeTimestamp, summaries);
+
+      // Track mouse movements as a single event
+      if (
+        snapshot.type === EventType.IncrementalSnapshot &&
+        (snapshot.data.source === IncrementalSource.MouseMove ||
+          snapshot.data.source === IncrementalSource.TouchMove)
+      ) {
+        if (!mouseMovementStarted) {
+          mouseMovementStarted = true;
+          summaries.push({
+            type: "Mouse Movement",
+            timestampStart: relativeTimestamp,
+            timestampEnd: relativeTimestamp, // Will update later
+          });
+        } else {
+          // Update the last mouse movement event's end time
+          const lastMouseEvent = summaries[summaries.length - 1];
+          lastMouseEvent.timestampEnd = relativeTimestamp;
+        }
+      }
     }
 
     setEventSummaries(summaries);
@@ -75,6 +106,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     }
   }, [eventSummaries]);
 
+  // Format timestamp to MM:SS
   const formatTimestamp = (milliseconds: number): string => {
     const totalSeconds = Math.floor(milliseconds / 1000);
     const minutes = Math.floor(totalSeconds / 60);
@@ -84,6 +116,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     return `${formattedMinutes}:${formattedSeconds}`;
   };
 
+  // Limit data size to prevent UI issues
   const limitDataSize = (data: any, maxLength = 200): any => {
     if (typeof data === "string") {
       return data.length > maxLength ? data.substring(0, maxLength) + "..." : data;
@@ -106,6 +139,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     }
   };
 
+  // Handle each event type
   const handleEvent = (
     snapshot: Snapshot,
     relativeTimestamp: number,
@@ -135,16 +169,8 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         });
         break;
 
-      case EventType.IncrementalSnapshot:
-        handleIncrementalData(snapshot.data as incrementalData, relativeTimestamp, summaries);
-        break;
-
       case EventType.Meta:
-        summaries.push({
-          type: "Meta Event",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize(snapshot.data),
-        });
+        // Handled in the main loop for page navigations
         break;
 
       case EventType.Custom:
@@ -156,11 +182,11 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         break;
 
       case EventType.Plugin:
-        summaries.push({
-          type: "Plugin Event",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize(snapshot.data),
-        });
+        handlePluginEvent(snapshot, relativeTimestamp, summaries);
+        break;
+
+      case EventType.IncrementalSnapshot:
+        handleIncrementalData(snapshot.data as incrementalData, relativeTimestamp, summaries);
         break;
 
       default:
@@ -171,51 +197,68 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     }
   };
 
+  // Handle plugin events and group them
+  const handlePluginEvent = (
+    snapshot: Snapshot,
+    relativeTimestamp: number,
+    summaries: EventSummary[]
+  ) => {
+    const lastEvent = summaries[summaries.length - 1];
+    const pluginEventSummary: EventSummary = {
+      type: "Plugin Event",
+      timestampStart: relativeTimestamp,
+      details: limitDataSize(snapshot.data),
+    };
+
+    if (lastEvent && lastEvent.type === "Plugin Events") {
+      // Update the end timestamp and increment the count
+      lastEvent.timestampEnd = relativeTimestamp;
+      lastEvent.details.count += 1;
+      lastEvent.children?.push(pluginEventSummary);
+    } else {
+      // Start a new "Plugin Events" group
+      summaries.push({
+        type: "Plugin Events",
+        timestampStart: relativeTimestamp,
+        timestampEnd: relativeTimestamp, // Will update if more plugins occur
+        details: { count: 1 },
+        children: [pluginEventSummary],
+      });
+    }
+  };
+
+  // Handle incremental data and group events
   const handleIncrementalData = (
     data: incrementalData,
     relativeTimestamp: number,
     summaries: EventSummary[]
   ) => {
-    const lastEvent = summaries[summaries.length - 1];
-
     switch (data.source) {
-      case IncrementalSource.Mutation:
-        summaries.push({
-          type: "DOM Mutation",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize(data),
-        });
-        break;
-
-      case IncrementalSource.MouseMove:
-      case IncrementalSource.TouchMove:
-        if (lastEvent && lastEvent.type === "Mouse Movement") {
-          lastEvent.timestampEnd = relativeTimestamp;
-        } else {
-          summaries.push({
-            type: "Mouse Movement",
-            timestampStart: relativeTimestamp,
-          });
-        }
-        break;
-
       case IncrementalSource.MouseInteraction:
+        const interactionType = getMouseInteractionType(data.type);
         summaries.push({
           type: "Mouse Interaction",
           timestampStart: relativeTimestamp,
-          details: limitDataSize({ elementId: data.id, interactionType: data.type }),
+          details: limitDataSize({
+            element: `Element ID ${data.id}`,
+            interactionType,
+          }),
         });
         break;
 
-      case IncrementalSource.Scroll:
-        if (lastEvent && lastEvent.type === "Scroll") {
-          lastEvent.timestampEnd = relativeTimestamp;
-        } else {
-          summaries.push({
-            type: "Scroll",
-            timestampStart: relativeTimestamp,
-          });
-        }
+      case IncrementalSource.Input:
+        summaries.push({
+          type: "Text Input",
+          timestampStart: relativeTimestamp,
+          details: limitDataSize({
+            element: `Element ID ${data.id}`,
+            value: data.text,
+          }),
+        });
+        break;
+
+      case IncrementalSource.Mutation:
+        handleMutationData(data, relativeTimestamp, summaries);
         break;
 
       case IncrementalSource.ViewportResize:
@@ -226,27 +269,109 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         });
         break;
 
-      case IncrementalSource.Input:
-        summaries.push({
-          type: "Text Input",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize(data),
-        });
-        break;
-
+      // Other incremental sources are handled elsewhere
       default:
-        summaries.push({
-          type: "Other Incremental Event",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize({ source: data.source, ...data }),
-        });
+        break;
     }
   };
 
+  // Handle mutations and group additions and removals
+  const handleMutationData = (
+    data: incrementalData,
+    relativeTimestamp: number,
+    summaries: EventSummary[]
+  ) => {
+    const lastEvent = summaries[summaries.length - 1];
+
+    // Handle additions
+    if (data.adds && data.adds.length > 0) {
+      const additionEvents = data.adds.map((add) => ({
+        type: "Element Added",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize({
+          parentId: add.parentId,
+          node: add.node,
+        }),
+      }));
+
+      if (lastEvent && lastEvent.type === "Elements Added") {
+        // Update the end timestamp and increment the count
+        lastEvent.timestampEnd = relativeTimestamp;
+        lastEvent.details.count += data.adds.length;
+        lastEvent.children?.push(...additionEvents);
+      } else {
+        // Start a new "Elements Added" event
+        summaries.push({
+          type: "Elements Added",
+          timestampStart: relativeTimestamp,
+          timestampEnd: relativeTimestamp, // Will update if more additions occur
+          details: { count: data.adds.length },
+          children: additionEvents,
+        });
+      }
+    }
+
+    // Handle deletions
+    if (data.removes && data.removes.length > 0) {
+      const removalEvents = data.removes.map((remove) => ({
+        type: "Element Removed",
+        timestampStart: relativeTimestamp,
+        details: limitDataSize({
+          id: remove.id,
+          parentId: remove.parentId,
+        }),
+      }));
+
+      if (lastEvent && lastEvent.type === "Elements Removed") {
+        // Update the end timestamp and increment the count
+        lastEvent.timestampEnd = relativeTimestamp;
+        lastEvent.details.count += data.removes.length;
+        lastEvent.children?.push(...removalEvents);
+      } else {
+        // Start a new "Elements Removed" event
+        summaries.push({
+          type: "Elements Removed",
+          timestampStart: relativeTimestamp,
+          timestampEnd: relativeTimestamp, // Will update if more removals occur
+          details: { count: data.removes.length },
+          children: removalEvents,
+        });
+      }
+    }
+  };
+
+  // Map mouse interaction types to human-readable strings
+  const getMouseInteractionType = (type: number): string => {
+    const interactionTypes: { [key: number]: string } = {
+      0: 'Mouse Up',
+      1: 'Mouse Down',
+      2: 'Click',
+      3: 'Context Menu',
+      4: 'DblClick',
+      5: 'Focus',
+      6: 'Blur',
+      7: 'Touch Start',
+      9: 'Touch End',
+    };
+    return interactionTypes[type] || 'Unknown';
+  };
+
+  const toggleGroupExpand = (index: number) => {
+    setExpandedGroups((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        newSet.add(index);
+      }
+      return newSet;
+    });
+  };
+
   return (
-    <div className="flex justify-center items-start space-x-4 mx-auto">
+    <div className="flex justify-center items-start mx-auto">
       <div className="relative bg-blue-300 p-4 rounded-lg shadow-lg w-full max-w-3xl m-4">
-        <h2 className="text-2xl font-semibold mb-4">Steps Instructions</h2>
+        <h2 className="text-2xl font-semibold mb-4">Event Summary</h2>
         <div className="max-h-96 overflow-y-auto" ref={chatContainerRef}>
           <ul className="space-y-4">
             {eventSummaries.map((event, index) => {
@@ -255,36 +380,68 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
                 ? formatTimestamp(event.timestampEnd)
                 : null;
 
+              const isGroup = event.children && event.children.length > 0;
+              const isExpanded = expandedGroups.has(index);
+
               return (
                 <li
                   key={index}
-                  className="p-4 bg-white rounded-lg shadow hover:bg-gray-100 transition"
+                  className="p-4 bg-white rounded-lg shadow hover:bg-gray-100 transition cursor-pointer"
                   style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
+                  onClick={() => isGroup && toggleGroupExpand(index)}
                 >
-                  <div className="flex flex-wrap justify-between items-center">
+                  <div>
                     <span className="font-bold">
-                      Timestamp: {startTime}
-                      {endTime ? ` - ${endTime}` : ''}
+                      Timestamp: {startTime}{endTime ? ` - ${endTime}` : ''}
                     </span>
-                    <div className="bg-gray-200 rounded p-2 mt-2 sm:mt-0 sm:ml-4 hover:bg-gray-300 transition">
-                      <span className="text-gray-700">{event.type}</span>
-                    </div>
                   </div>
-                  {event.details && (
-                    <div className="mt-2">
-                      {Object.entries(event.details).map(([key, value], idx) => (
-                        <div
-                          key={idx}
-                          className="text-sm text-gray-600 break-words overflow-hidden text-ellipsis"
-                          style={{ maxWidth: '100%' }}
-                        >
-                          <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
-                          {typeof value === "object"
-                            ? JSON.stringify(value)
-                            : value}
-                        </div>
-                      ))}
+                  <div>
+                    <strong>{event.type}</strong>
+                    {event.details && event.details.count && (
+                      <span>
+                        : {event.details.count} {event.type === "Elements Added" ? "elements added" : event.type === "Elements Removed" ? "elements removed" : "plugin events"}
+                      </span>
+                    )}
+                  </div>
+                  {event.details && !event.details.count && Object.entries(event.details).map(([key, value], idx) => (
+                    <div
+                      key={idx}
+                      className="text-sm text-gray-600"
+                      style={{ maxWidth: '100%' }}
+                    >
+                      <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                      {typeof value === "object"
+                        ? JSON.stringify(value, null, 2)
+                        : value}
                     </div>
+                  ))}
+                  {isGroup && isExpanded && (
+                    <ul className="mt-2 space-y-2">
+                      {event.children?.map((childEvent, childIndex) => (
+                        <li key={childIndex} className="pl-4 border-l-2 border-gray-300">
+                          <div>
+                            <span className="font-bold">
+                              Timestamp: {formatTimestamp(childEvent.timestampStart)}
+                            </span>
+                          </div>
+                          <div>
+                            <strong>{childEvent.type}</strong>
+                          </div>
+                          {childEvent.details && Object.entries(childEvent.details).map(([key, value], idx) => (
+                            <div
+                              key={idx}
+                              className="text-sm text-gray-600"
+                              style={{ maxWidth: '100%' }}
+                            >
+                              <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                              {typeof value === "object"
+                                ? JSON.stringify(value, null, 2)
+                                : value}
+                            </div>
+                          ))}
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </li>
               );
