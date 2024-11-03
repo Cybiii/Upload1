@@ -40,6 +40,8 @@ interface EventSummary {
   timestampStart: number;
   timestampEnd?: number;
   details?: any;
+  isTruncated?: boolean;
+  fullDetails?: any;
   children?: EventSummary[];
 }
 
@@ -50,6 +52,7 @@ interface StepsChatProps {
 const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
   const [eventSummaries, setEventSummaries] = useState<EventSummary[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
+  const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
   const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -117,25 +120,56 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
   };
 
   // Limit data size to prevent UI issues
-  const limitDataSize = (data: any, maxLength = 200): any => {
+  const limitDataSize = (
+    data: any,
+    maxLength = 200,
+    maxProps = 3,
+    noTruncateKeys: string[] = []
+  ): { data: any; isTruncated: boolean; fullData?: any } => {
+    let isTruncated = false;
+    let fullData: any;
+
     if (typeof data === "string") {
-      return data.length > maxLength ? data.substring(0, maxLength) + "..." : data;
+      if (data.length > maxLength) {
+        isTruncated = true;
+        fullData = data;
+        data = data.substring(0, maxLength);
+      }
+      return { data, isTruncated, fullData };
     } else if (Array.isArray(data)) {
-      return data.slice(0, 3).map((item) => limitDataSize(item, maxLength));
+      if (data.length > maxProps) {
+        isTruncated = true;
+        fullData = data;
+        data = data.slice(0, maxProps);
+      }
+      const result = [];
+      for (let i = 0; i < data.length; i++) {
+        const limited = limitDataSize(data[i], maxLength, maxProps, noTruncateKeys);
+        if (limited.isTruncated) isTruncated = true;
+        result.push(limited.data);
+      }
+      return { data: result, isTruncated, fullData: isTruncated ? fullData : undefined };
     } else if (typeof data === "object" && data !== null) {
       const limitedData: any = {};
       let count = 0;
+      fullData = data;
       for (const key in data) {
-        if (count >= 3) {
-          limitedData["..."] = "...";
+        if (noTruncateKeys.includes(key)) {
+          limitedData[key] = data[key];
+          continue;
+        }
+        if (count >= maxProps) {
+          isTruncated = true;
           break;
         }
-        limitedData[key] = limitDataSize(data[key], maxLength);
+        const limited = limitDataSize(data[key], maxLength, maxProps, noTruncateKeys);
+        if (limited.isTruncated) isTruncated = true;
+        limitedData[key] = limited.data;
         count++;
       }
-      return limitedData;
+      return { data: limitedData, isTruncated, fullData: isTruncated ? fullData : undefined };
     } else {
-      return data;
+      return { data, isTruncated };
     }
   };
 
@@ -174,10 +208,14 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         break;
 
       case EventType.Custom:
+        // Include 'tag' under 'element' in noTruncateKeys
+        const customDataLimited = limitDataSize(snapshot.data, 200, 3, ['parentId', 'plugin', 'tag']);
         summaries.push({
           type: "Custom Event",
           timestampStart: relativeTimestamp,
-          details: limitDataSize(snapshot.data),
+          details: customDataLimited.data,
+          isTruncated: customDataLimited.isTruncated,
+          fullDetails: customDataLimited.fullData,
         });
         break;
 
@@ -204,10 +242,13 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     summaries: EventSummary[]
   ) => {
     const lastEvent = summaries[summaries.length - 1];
+    const pluginDataLimited = limitDataSize(snapshot.data, 200, 3, ['plugin']);
     const pluginEventSummary: EventSummary = {
       type: "Plugin Event",
       timestampStart: relativeTimestamp,
-      details: limitDataSize(snapshot.data),
+      details: pluginDataLimited.data,
+      isTruncated: false, // Do not truncate plugin data
+      fullDetails: undefined,
     };
 
     if (lastEvent && lastEvent.type === "Plugin Events") {
@@ -236,25 +277,44 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     switch (data.source) {
       case IncrementalSource.MouseInteraction:
         const interactionType = getMouseInteractionType(data.type);
+        const mouseInteractionData = limitDataSize(
+          {
+            element: `Element ID ${data.id}`,
+            interactionType,
+          },
+          200,
+          3,
+          ['element']
+        );
         summaries.push({
           type: "Mouse Interaction",
           timestampStart: relativeTimestamp,
-          details: limitDataSize({
-            element: `Element ID ${data.id}`,
-            interactionType,
-          }),
+          details: mouseInteractionData.data,
+          isTruncated: mouseInteractionData.isTruncated,
+          fullDetails: mouseInteractionData.fullData,
         });
         break;
 
       case IncrementalSource.Input:
-        summaries.push({
-          type: "Text Input",
-          timestampStart: relativeTimestamp,
-          details: limitDataSize({
-            element: `Element ID ${data.id}`,
-            value: data.text,
-          }),
-        });
+        // Only process if there is a value
+        if (data.text && data.text.trim() !== '') {
+          const inputDataLimited = limitDataSize(
+            {
+              element: `Element ID ${data.id}`,
+              value: data.text,
+            },
+            200,
+            3,
+            ['element', 'value']
+          );
+          summaries.push({
+            type: "Text Input",
+            timestampStart: relativeTimestamp,
+            details: inputDataLimited.data,
+            isTruncated: false, // Do not truncate input values
+            fullDetails: undefined,
+          });
+        }
         break;
 
       case IncrementalSource.Mutation:
@@ -262,10 +322,13 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         break;
 
       case IncrementalSource.ViewportResize:
+        const resizeDataLimited = limitDataSize(data, 200, 3, ['width', 'height']);
         summaries.push({
           type: "Viewport Resize",
           timestampStart: relativeTimestamp,
-          details: limitDataSize(data),
+          details: resizeDataLimited.data,
+          isTruncated: resizeDataLimited.isTruncated,
+          fullDetails: resizeDataLimited.fullData,
         });
         break;
 
@@ -285,14 +348,24 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
 
     // Handle additions
     if (data.adds && data.adds.length > 0) {
-      const additionEvents = data.adds.map((add) => ({
-        type: "Element Added",
-        timestampStart: relativeTimestamp,
-        details: limitDataSize({
-          parentId: add.parentId,
-          node: add.node,
-        }),
-      }));
+      const additionEvents = data.adds.map((add) => {
+        const addDataLimited = limitDataSize(
+          {
+            parentId: add.parentId,
+            node: add.node,
+          },
+          200,
+          3,
+          ['parentId'] // Do not truncate parentId
+        );
+        return {
+          type: "Element Added",
+          timestampStart: relativeTimestamp,
+          details: addDataLimited.data,
+          isTruncated: addDataLimited.isTruncated,
+          fullDetails: addDataLimited.fullData,
+        };
+      });
 
       if (lastEvent && lastEvent.type === "Elements Added") {
         // Update the end timestamp and increment the count
@@ -313,14 +386,24 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
 
     // Handle deletions
     if (data.removes && data.removes.length > 0) {
-      const removalEvents = data.removes.map((remove) => ({
-        type: "Element Removed",
-        timestampStart: relativeTimestamp,
-        details: limitDataSize({
-          id: remove.id,
-          parentId: remove.parentId,
-        }),
-      }));
+      const removalEvents = data.removes.map((remove) => {
+        const removeDataLimited = limitDataSize(
+          {
+            id: remove.id,
+            parentId: remove.parentId,
+          },
+          200,
+          3,
+          ['id', 'parentId'] // Do not truncate id and parentId
+        );
+        return {
+          type: "Element Removed",
+          timestampStart: relativeTimestamp,
+          details: removeDataLimited.data,
+          isTruncated: removeDataLimited.isTruncated,
+          fullDetails: removeDataLimited.fullData,
+        };
+      });
 
       if (lastEvent && lastEvent.type === "Elements Removed") {
         // Update the end timestamp and increment the count
@@ -368,6 +451,18 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     });
   };
 
+  const toggleDetailExpand = (key: string) => {
+    setExpandedDetails((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(key)) {
+        newSet.delete(key);
+      } else {
+        newSet.add(key);
+      }
+      return newSet;
+    });
+  };
+
   return (
     <div className="flex justify-center items-start mx-auto">
       <div className="relative bg-blue-300 p-4 rounded-lg shadow-lg w-full max-w-3xl m-4">
@@ -381,14 +476,16 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
                 : null;
 
               const isGroup = event.children && event.children.length > 0;
+              const hasExpandableDetails = event.isTruncated;
+              const isExpandable = isGroup || hasExpandableDetails;
               const isExpanded = expandedGroups.has(index);
 
               return (
                 <li
                   key={index}
-                  className="p-4 bg-white rounded-lg shadow hover:bg-gray-100 transition cursor-pointer"
+                  className={`p-4 bg-white rounded-lg shadow hover:bg-gray-100 transition ${isExpandable ? 'cursor-pointer' : ''}`}
                   style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
-                  onClick={() => isGroup && toggleGroupExpand(index)}
+                  onClick={() => isGroup && isExpandable && toggleGroupExpand(index)}
                 >
                   <div>
                     <span className="font-bold">
@@ -403,18 +500,43 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
                       </span>
                     )}
                   </div>
-                  {event.details && !event.details.count && Object.entries(event.details).map(([key, value], idx) => (
-                    <div
-                      key={idx}
-                      className="text-sm text-gray-600"
-                      style={{ maxWidth: '100%' }}
-                    >
-                      <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
-                      {typeof value === "object"
-                        ? JSON.stringify(value, null, 2)
-                        : value}
+                  {event.details && !event.details.count && (
+                    <div className="mt-2">
+                      {Object.entries(event.details).map(([key, value], idx) => {
+                        const detailKey = `${index}-${key}`;
+                        const isDetailExpanded = expandedDetails.has(detailKey);
+                        const fullValue = event.isTruncated && event.fullDetails ? event.fullDetails[key] : value;
+
+                        // Do not show "Show More" for specified keys
+                        const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
+                        const canExpand = event.isTruncated && !noShowMoreKeys.includes(key);
+
+                        return (
+                          <div
+                            key={idx}
+                            className="text-sm text-gray-600"
+                            style={{ maxWidth: '100%' }}
+                          >
+                            <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                            {typeof value === "object"
+                              ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
+                              : isDetailExpanded ? fullValue : value}
+                            {canExpand && (
+                              <button
+                                className="text-blue-500 ml-2"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleDetailExpand(detailKey);
+                                }}
+                              >
+                                {isDetailExpanded ? "Show Less" : "Show More"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
+                  )}
                   {isGroup && isExpanded && (
                     <ul className="mt-2 space-y-2">
                       {event.children?.map((childEvent, childIndex) => (
@@ -427,18 +549,43 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
                           <div>
                             <strong>{childEvent.type}</strong>
                           </div>
-                          {childEvent.details && Object.entries(childEvent.details).map(([key, value], idx) => (
-                            <div
-                              key={idx}
-                              className="text-sm text-gray-600"
-                              style={{ maxWidth: '100%' }}
-                            >
-                              <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
-                              {typeof value === "object"
-                                ? JSON.stringify(value, null, 2)
-                                : value}
+                          {childEvent.details && (
+                            <div className="mt-2">
+                              {Object.entries(childEvent.details).map(([key, value], idx) => {
+                                const detailKey = `${index}-${childIndex}-${key}`;
+                                const isDetailExpanded = expandedDetails.has(detailKey);
+                                const fullValue = childEvent.isTruncated && childEvent.fullDetails ? childEvent.fullDetails[key] : value;
+
+                                // Do not show "Show More" for specified keys
+                                const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
+                                const canExpand = childEvent.isTruncated && !noShowMoreKeys.includes(key);
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="text-sm text-gray-600"
+                                    style={{ maxWidth: '100%' }}
+                                  >
+                                    <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                                    {typeof value === "object"
+                                      ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
+                                      : isDetailExpanded ? fullValue : value}
+                                    {canExpand && (
+                                      <button
+                                        className="text-blue-500 ml-2"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleDetailExpand(detailKey);
+                                        }}
+                                      >
+                                        {isDetailExpanded ? "Show Less" : "Show More"}
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
-                          ))}
+                          )}
                         </li>
                       ))}
                     </ul>
