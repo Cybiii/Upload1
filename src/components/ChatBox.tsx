@@ -100,8 +100,8 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
       }
     }
 
-    // After processing all steps, merge back-to-back groups of elements added and removed
-    const mergedSummaries = mergeElementGroups(summaries);
+    // After processing all steps, merge back-to-back groups as per the requirement
+    const mergedSummaries = mergeGroups(summaries);
     setEventSummaries(mergedSummaries);
   }, [steps]);
 
@@ -226,13 +226,12 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     }
   };
 
-  // Handle custom events and group them
+  // Handle custom events and add them directly to summaries
   const handleCustomEvent = (
     snapshot: Snapshot,
     relativeTimestamp: number,
     summaries: EventSummary[]
   ) => {
-    const lastEvent = summaries[summaries.length - 1];
     const customDataLimited = limitDataSize(snapshot.data, 200, 3, ['parentId', 'plugin', 'tag']);
     const customEventSummary: EventSummary = {
       type: "Custom Event",
@@ -242,28 +241,16 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
       fullDetails: customDataLimited.fullData,
     };
 
-    if (lastEvent && lastEvent.type === "Custom Events") {
-      // Update the end timestamp and add the custom event to the group's children
-      lastEvent.timestampEnd = relativeTimestamp;
-      lastEvent.children?.push(customEventSummary);
-    } else {
-      // Start a new "Custom Events" group
-      summaries.push({
-        type: "Custom Events",
-        timestampStart: relativeTimestamp,
-        timestampEnd: relativeTimestamp, // Will update if more custom events occur
-        children: [customEventSummary],
-      });
-    }
+    // Directly add to summaries; merging will handle grouping
+    summaries.push(customEventSummary);
   };
 
-  // Handle plugin events and group them
+  // Handle plugin events and add them directly to summaries
   const handlePluginEvent = (
     snapshot: Snapshot,
     relativeTimestamp: number,
     summaries: EventSummary[]
   ) => {
-    const lastEvent = summaries[summaries.length - 1];
     const pluginDataLimited = limitDataSize(snapshot.data, 200, 3, ['plugin']);
     const pluginEventSummary: EventSummary = {
       type: "Plugin Event",
@@ -273,19 +260,8 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
       fullDetails: undefined,
     };
 
-    if (lastEvent && lastEvent.type === "Plugin Events") {
-      // Update the end timestamp and add the plugin event to the group's children
-      lastEvent.timestampEnd = relativeTimestamp;
-      lastEvent.children?.push(pluginEventSummary);
-    } else {
-      // Start a new "Plugin Events" group
-      summaries.push({
-        type: "Plugin Events",
-        timestampStart: relativeTimestamp,
-        timestampEnd: relativeTimestamp, // Will update if more plugins occur
-        children: [pluginEventSummary],
-      });
-    }
+    // Directly add to summaries; merging will handle grouping
+    summaries.push(pluginEventSummary);
   };
 
   // Handle incremental data and group events
@@ -364,15 +340,13 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     }
   };
 
-  // Handle mutations and group additions and removals
+  // Handle mutations and add them directly to summaries
   const handleMutationData = (
     data: incrementalData,
     relativeTimestamp: number,
     summaries: EventSummary[]
   ) => {
     // Handle additions and removals
-    const mutationEvents: EventSummary[] = [];
-
     if (data.adds && data.adds.length > 0) {
       const additionEvents = data.adds.map((add) => {
         const addDataLimited = limitDataSize(
@@ -392,7 +366,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
           fullDetails: addDataLimited.fullData,
         };
       });
-      mutationEvents.push(...additionEvents);
+      summaries.push(...additionEvents);
     }
 
     if (data.removes && data.removes.length > 0) {
@@ -414,63 +388,47 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
           fullDetails: removeDataLimited.fullData,
         };
       });
-      mutationEvents.push(...removalEvents);
-    }
-
-    if (mutationEvents.length > 0) {
-      summaries.push({
-        type: "DOM Mutations",
-        timestampStart: relativeTimestamp,
-        timestampEnd: relativeTimestamp,
-        children: mutationEvents,
-      });
+      summaries.push(...removalEvents);
     }
   };
 
-  // Function to merge back-to-back element groups
-  const mergeElementGroups = (summaries: EventSummary[]): EventSummary[] => {
+  // Function to merge back-to-back groups
+  const mergeGroups = (summaries: EventSummary[]): EventSummary[] => {
     const merged: EventSummary[] = [];
     let i = 0;
 
     while (i < summaries.length) {
       const currentEvent = summaries[i];
 
-      if (currentEvent.type === "DOM Mutations") {
+      if (
+        currentEvent.type === "Element Added" ||
+        currentEvent.type === "Element Removed" ||
+        currentEvent.type === "Plugin Event" ||
+        currentEvent.type === "Custom Event"
+      ) {
         const groupedEvents: EventSummary[] = [];
         let timestampStart = currentEvent.timestampStart;
         let timestampEnd = currentEvent.timestampEnd || currentEvent.timestampStart;
 
-        // Collect consecutive DOM Mutations events
-        while (i < summaries.length && summaries[i].type === "DOM Mutations") {
+        // Collect consecutive events of specified types
+        while (
+          i < summaries.length &&
+          (
+            summaries[i].type === "Element Added" ||
+            summaries[i].type === "Element Removed" ||
+            summaries[i].type === "Plugin Event" ||
+            summaries[i].type === "Custom Event"
+          )
+        ) {
           const event = summaries[i];
-          groupedEvents.push(...(event.children || []));
+          groupedEvents.push(event);
           timestampEnd = event.timestampEnd || event.timestampStart;
           i++;
         }
 
-        // Create a new grouped DOM Mutations event
+        // Create a new grouped event
         merged.push({
-          type: "DOM Mutations",
-          timestampStart,
-          timestampEnd,
-          children: groupedEvents,
-        });
-      } else if (currentEvent.type === "Custom Events") {
-        const groupedEvents: EventSummary[] = [];
-        let timestampStart = currentEvent.timestampStart;
-        let timestampEnd = currentEvent.timestampEnd || currentEvent.timestampStart;
-
-        // Collect consecutive Custom Events
-        while (i < summaries.length && summaries[i].type === "Custom Events") {
-          const event = summaries[i];
-          groupedEvents.push(...(event.children || []));
-          timestampEnd = event.timestampEnd || event.timestampStart;
-          i++;
-        }
-
-        // Create a new grouped Custom Events event
-        merged.push({
-          type: "Custom Events",
+          type: "DOM Mutations and Events",
           timestampStart,
           timestampEnd,
           details: { count: groupedEvents.length },
@@ -528,14 +486,8 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
 
   const getGroupEventDescription = (eventType: string): string => {
     switch(eventType) {
-      case "Elements Added":
-        return "elements added";
-      case "Elements Removed":
-        return "elements removed";
-      case "Plugin Events":
-        return "plugin events";
-      case "Custom Events":
-        return "custom events";
+      case "DOM Mutations and Events":
+        return "events";
       default:
         return "";
     }
@@ -543,7 +495,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
 
   return (
     <div className="flex justify-center items-start mx-auto">
-      <div className="relative bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 p-6 rounded-lg shadow-xl w-full max-w-3xl m-4">
+      <div className="relative bg-gradient-to-r from-blue-500 via-blue-500 to-pink-500 p-6 rounded-lg shadow-xl w-full max-w-3xl m-4">
         <h2 className="text-3xl font-bold mb-6 text-white">Event Summary</h2>
         <div className="max-h-96 overflow-y-auto" ref={chatContainerRef}>
           <ul className="space-y-4">
