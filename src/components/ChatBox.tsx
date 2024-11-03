@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { EventType, incrementalData, IncrementalSource } from "../../index";
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface Noded {
   id: number;
@@ -99,15 +100,13 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
       }
     }
 
-    setEventSummaries(summaries);
+    // After processing all steps, merge back-to-back groups of elements added and removed
+    const mergedSummaries = mergeElementGroups(summaries);
+    setEventSummaries(mergedSummaries);
   }, [steps]);
 
-  useEffect(() => {
-    const chatContainer = chatContainerRef.current;
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-    }
-  }, [eventSummaries]);
+  // Removed the useEffect that scrolls to the bottom
+  // Now the summary will start at the top when a file is uploaded
 
   // Format timestamp to MM:SS
   const formatTimestamp = (milliseconds: number): string => {
@@ -208,15 +207,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         break;
 
       case EventType.Custom:
-        // Include 'tag' under 'element' in noTruncateKeys
-        const customDataLimited = limitDataSize(snapshot.data, 200, 3, ['parentId', 'plugin', 'tag']);
-        summaries.push({
-          type: "Custom Event",
-          timestampStart: relativeTimestamp,
-          details: customDataLimited.data,
-          isTruncated: customDataLimited.isTruncated,
-          fullDetails: customDataLimited.fullData,
-        });
+        handleCustomEvent(snapshot, relativeTimestamp, summaries);
         break;
 
       case EventType.Plugin:
@@ -232,6 +223,37 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
           type: "Unknown Event",
           timestampStart: relativeTimestamp,
         });
+    }
+  };
+
+  // Handle custom events and group them
+  const handleCustomEvent = (
+    snapshot: Snapshot,
+    relativeTimestamp: number,
+    summaries: EventSummary[]
+  ) => {
+    const lastEvent = summaries[summaries.length - 1];
+    const customDataLimited = limitDataSize(snapshot.data, 200, 3, ['parentId', 'plugin', 'tag']);
+    const customEventSummary: EventSummary = {
+      type: "Custom Event",
+      timestampStart: relativeTimestamp,
+      details: customDataLimited.data,
+      isTruncated: customDataLimited.isTruncated,
+      fullDetails: customDataLimited.fullData,
+    };
+
+    if (lastEvent && lastEvent.type === "Custom Events") {
+      // Update the end timestamp and add the custom event to the group's children
+      lastEvent.timestampEnd = relativeTimestamp;
+      lastEvent.children?.push(customEventSummary);
+    } else {
+      // Start a new "Custom Events" group
+      summaries.push({
+        type: "Custom Events",
+        timestampStart: relativeTimestamp,
+        timestampEnd: relativeTimestamp, // Will update if more custom events occur
+        children: [customEventSummary],
+      });
     }
   };
 
@@ -252,9 +274,8 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     };
 
     if (lastEvent && lastEvent.type === "Plugin Events") {
-      // Update the end timestamp and increment the count
+      // Update the end timestamp and add the plugin event to the group's children
       lastEvent.timestampEnd = relativeTimestamp;
-      lastEvent.details.count += 1;
       lastEvent.children?.push(pluginEventSummary);
     } else {
       // Start a new "Plugin Events" group
@@ -262,7 +283,6 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
         type: "Plugin Events",
         timestampStart: relativeTimestamp,
         timestampEnd: relativeTimestamp, // Will update if more plugins occur
-        details: { count: 1 },
         children: [pluginEventSummary],
       });
     }
@@ -276,6 +296,12 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
   ) => {
     switch (data.source) {
       case IncrementalSource.MouseInteraction:
+        // Exclude certain interaction types
+        const excludedInteractionTypes = [0, 1, 5, 6]; // Mouse Up, Mouse Down, Focus, Blur
+        if (excludedInteractionTypes.includes(data.type)) {
+          // Skip this event
+          break;
+        }
         const interactionType = getMouseInteractionType(data.type);
         const mouseInteractionData = limitDataSize(
           {
@@ -344,9 +370,9 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     relativeTimestamp: number,
     summaries: EventSummary[]
   ) => {
-    const lastEvent = summaries[summaries.length - 1];
+    // Handle additions and removals
+    const mutationEvents: EventSummary[] = [];
 
-    // Handle additions
     if (data.adds && data.adds.length > 0) {
       const additionEvents = data.adds.map((add) => {
         const addDataLimited = limitDataSize(
@@ -366,25 +392,9 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
           fullDetails: addDataLimited.fullData,
         };
       });
-
-      if (lastEvent && lastEvent.type === "Elements Added") {
-        // Update the end timestamp and increment the count
-        lastEvent.timestampEnd = relativeTimestamp;
-        lastEvent.details.count += data.adds.length;
-        lastEvent.children?.push(...additionEvents);
-      } else {
-        // Start a new "Elements Added" event
-        summaries.push({
-          type: "Elements Added",
-          timestampStart: relativeTimestamp,
-          timestampEnd: relativeTimestamp, // Will update if more additions occur
-          details: { count: data.adds.length },
-          children: additionEvents,
-        });
-      }
+      mutationEvents.push(...additionEvents);
     }
 
-    // Handle deletions
     if (data.removes && data.removes.length > 0) {
       const removalEvents = data.removes.map((remove) => {
         const removeDataLimited = limitDataSize(
@@ -404,23 +414,76 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
           fullDetails: removeDataLimited.fullData,
         };
       });
+      mutationEvents.push(...removalEvents);
+    }
 
-      if (lastEvent && lastEvent.type === "Elements Removed") {
-        // Update the end timestamp and increment the count
-        lastEvent.timestampEnd = relativeTimestamp;
-        lastEvent.details.count += data.removes.length;
-        lastEvent.children?.push(...removalEvents);
-      } else {
-        // Start a new "Elements Removed" event
-        summaries.push({
-          type: "Elements Removed",
-          timestampStart: relativeTimestamp,
-          timestampEnd: relativeTimestamp, // Will update if more removals occur
-          details: { count: data.removes.length },
-          children: removalEvents,
+    if (mutationEvents.length > 0) {
+      summaries.push({
+        type: "DOM Mutations",
+        timestampStart: relativeTimestamp,
+        timestampEnd: relativeTimestamp,
+        children: mutationEvents,
+      });
+    }
+  };
+
+  // Function to merge back-to-back element groups
+  const mergeElementGroups = (summaries: EventSummary[]): EventSummary[] => {
+    const merged: EventSummary[] = [];
+    let i = 0;
+
+    while (i < summaries.length) {
+      const currentEvent = summaries[i];
+
+      if (currentEvent.type === "DOM Mutations") {
+        const groupedEvents: EventSummary[] = [];
+        let timestampStart = currentEvent.timestampStart;
+        let timestampEnd = currentEvent.timestampEnd || currentEvent.timestampStart;
+
+        // Collect consecutive DOM Mutations events
+        while (i < summaries.length && summaries[i].type === "DOM Mutations") {
+          const event = summaries[i];
+          groupedEvents.push(...(event.children || []));
+          timestampEnd = event.timestampEnd || event.timestampStart;
+          i++;
+        }
+
+        // Create a new grouped DOM Mutations event
+        merged.push({
+          type: "DOM Mutations",
+          timestampStart,
+          timestampEnd,
+          children: groupedEvents,
         });
+      } else if (currentEvent.type === "Custom Events") {
+        const groupedEvents: EventSummary[] = [];
+        let timestampStart = currentEvent.timestampStart;
+        let timestampEnd = currentEvent.timestampEnd || currentEvent.timestampStart;
+
+        // Collect consecutive Custom Events
+        while (i < summaries.length && summaries[i].type === "Custom Events") {
+          const event = summaries[i];
+          groupedEvents.push(...(event.children || []));
+          timestampEnd = event.timestampEnd || event.timestampStart;
+          i++;
+        }
+
+        // Create a new grouped Custom Events event
+        merged.push({
+          type: "Custom Events",
+          timestampStart,
+          timestampEnd,
+          details: { count: groupedEvents.length },
+          children: groupedEvents,
+        });
+      } else {
+        // Non-grouped events, just add them to the merged list
+        merged.push(currentEvent);
+        i++;
       }
     }
+
+    return merged;
   };
 
   // Map mouse interaction types to human-readable strings
@@ -463,10 +526,25 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
     });
   };
 
+  const getGroupEventDescription = (eventType: string): string => {
+    switch(eventType) {
+      case "Elements Added":
+        return "elements added";
+      case "Elements Removed":
+        return "elements removed";
+      case "Plugin Events":
+        return "plugin events";
+      case "Custom Events":
+        return "custom events";
+      default:
+        return "";
+    }
+  };
+
   return (
     <div className="flex justify-center items-start mx-auto">
-      <div className="relative bg-blue-300 p-4 rounded-lg shadow-lg w-full max-w-3xl m-4">
-        <h2 className="text-2xl font-semibold mb-4">Event Summary</h2>
+      <div className="relative bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 p-6 rounded-lg shadow-xl w-full max-w-3xl m-4">
+        <h2 className="text-3xl font-bold mb-6 text-white">Event Summary</h2>
         <div className="max-h-96 overflow-y-auto" ref={chatContainerRef}>
           <ul className="space-y-4">
             {eventSummaries.map((event, index) => {
@@ -481,116 +559,145 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
               const isExpanded = expandedGroups.has(index);
 
               return (
-                <li
+                <motion.li
                   key={index}
-                  className={`p-4 bg-white rounded-lg shadow hover:bg-gray-100 transition ${isExpandable ? 'cursor-pointer' : ''}`}
-                  style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
-                  onClick={() => isGroup && isExpandable && toggleGroupExpand(index)}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.3 }}
                 >
-                  <div>
-                    <span className="font-bold">
-                      Timestamp: {startTime}{endTime ? ` - ${endTime}` : ''}
-                    </span>
-                  </div>
-                  <div>
-                    <strong>{event.type}</strong>
-                    {event.details && event.details.count && (
-                      <span>
-                        : {event.details.count} {event.type === "Elements Added" ? "elements added" : event.type === "Elements Removed" ? "elements removed" : "plugin events"}
-                      </span>
+                  <div
+                    className={`p-5 bg-white bg-opacity-90 rounded-lg shadow-md hover:shadow-lg transition ${isExpandable ? 'cursor-pointer' : ''}`}
+                    style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }}
+                    onClick={() => isGroup && isExpandable && toggleGroupExpand(index)}
+                  >
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="font-semibold text-indigo-700">
+                          Timestamp: {startTime}{endTime ? ` - ${endTime}` : ''}
+                        </span>
+                      </div>
+                      {isGroup && (
+                        <motion.span
+                          initial={{ rotate: 0 }}
+                          animate={{ rotate: isExpanded ? 90 : 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="text-indigo-700"
+                        >
+                          ▶
+                        </motion.span>
+                      )}
+                    </div>
+                    <div className="mt-2">
+                      <strong className="text-lg text-gray-800">{event.type}</strong>
+                      {event.details && event.details.count && (
+                        <span className="text-gray-700">
+                          : {event.details.count} {getGroupEventDescription(event.type)}
+                        </span>
+                      )}
+                    </div>
+                    {event.details && !event.details.count && (
+                      <div className="mt-2">
+                        {Object.entries(event.details).map(([key, value], idx) => {
+                          const detailKey = `${index}-${key}`;
+                          const isDetailExpanded = expandedDetails.has(detailKey);
+                          const fullValue = event.isTruncated && event.fullDetails ? event.fullDetails[key] : value;
+
+                          // Do not show "Show More" for specified keys
+                          const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
+                          const canExpand = event.isTruncated && !noShowMoreKeys.includes(key);
+
+                          return (
+                            <div
+                              key={idx}
+                              className="text-sm text-gray-600 mt-1"
+                              style={{ maxWidth: '100%' }}
+                            >
+                              <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                              {typeof value === "object"
+                                ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
+                                : isDetailExpanded ? fullValue : value}
+                              {canExpand && (
+                                <button
+                                  className="text-blue-500 ml-2"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleDetailExpand(detailKey);
+                                  }}
+                                >
+                                  {isDetailExpanded ? "Show Less" : "Show More"}
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {isGroup && (
+                      <AnimatePresence>
+                        {isExpanded && (
+                          <motion.ul
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.3 }}
+                            className="mt-4 space-y-2 overflow-hidden"
+                          >
+                            {event.children?.map((childEvent, childIndex) => (
+                              <li key={childIndex} className="pl-4 border-l-2 border-gray-300">
+                                <div>
+                                  <span className="font-semibold text-indigo-700">
+                                    Timestamp: {formatTimestamp(childEvent.timestampStart)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <strong className="text-gray-800">{childEvent.type}</strong>
+                                </div>
+                                {childEvent.details && (
+                                  <div className="mt-2">
+                                    {Object.entries(childEvent.details).map(([key, value], idx) => {
+                                      const detailKey = `${index}-${childIndex}-${key}`;
+                                      const isDetailExpanded = expandedDetails.has(detailKey);
+                                      const fullValue = childEvent.isTruncated && childEvent.fullDetails ? childEvent.fullDetails[key] : value;
+
+                                      // Do not show "Show More" for specified keys
+                                      const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
+                                      const canExpand = childEvent.isTruncated && !noShowMoreKeys.includes(key);
+
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className="text-sm text-gray-600 mt-1"
+                                          style={{ maxWidth: '100%' }}
+                                        >
+                                          <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
+                                          {typeof value === "object"
+                                            ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
+                                            : isDetailExpanded ? fullValue : value}
+                                          {canExpand && (
+                                            <button
+                                              className="text-blue-500 ml-2"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                toggleDetailExpand(detailKey);
+                                              }}
+                                            >
+                                              {isDetailExpanded ? "Show Less" : "Show More"}
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </li>
+                            ))}
+                          </motion.ul>
+                        )}
+                      </AnimatePresence>
                     )}
                   </div>
-                  {event.details && !event.details.count && (
-                    <div className="mt-2">
-                      {Object.entries(event.details).map(([key, value], idx) => {
-                        const detailKey = `${index}-${key}`;
-                        const isDetailExpanded = expandedDetails.has(detailKey);
-                        const fullValue = event.isTruncated && event.fullDetails ? event.fullDetails[key] : value;
-
-                        // Do not show "Show More" for specified keys
-                        const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
-                        const canExpand = event.isTruncated && !noShowMoreKeys.includes(key);
-
-                        return (
-                          <div
-                            key={idx}
-                            className="text-sm text-gray-600"
-                            style={{ maxWidth: '100%' }}
-                          >
-                            <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
-                            {typeof value === "object"
-                              ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
-                              : isDetailExpanded ? fullValue : value}
-                            {canExpand && (
-                              <button
-                                className="text-blue-500 ml-2"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleDetailExpand(detailKey);
-                                }}
-                              >
-                                {isDetailExpanded ? "Show Less" : "Show More"}
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {isGroup && isExpanded && (
-                    <ul className="mt-2 space-y-2">
-                      {event.children?.map((childEvent, childIndex) => (
-                        <li key={childIndex} className="pl-4 border-l-2 border-gray-300">
-                          <div>
-                            <span className="font-bold">
-                              Timestamp: {formatTimestamp(childEvent.timestampStart)}
-                            </span>
-                          </div>
-                          <div>
-                            <strong>{childEvent.type}</strong>
-                          </div>
-                          {childEvent.details && (
-                            <div className="mt-2">
-                              {Object.entries(childEvent.details).map(([key, value], idx) => {
-                                const detailKey = `${index}-${childIndex}-${key}`;
-                                const isDetailExpanded = expandedDetails.has(detailKey);
-                                const fullValue = childEvent.isTruncated && childEvent.fullDetails ? childEvent.fullDetails[key] : value;
-
-                                // Do not show "Show More" for specified keys
-                                const noShowMoreKeys = ['parentId', 'plugin', 'element', 'value', 'tag'];
-                                const canExpand = childEvent.isTruncated && !noShowMoreKeys.includes(key);
-
-                                return (
-                                  <div
-                                    key={idx}
-                                    className="text-sm text-gray-600"
-                                    style={{ maxWidth: '100%' }}
-                                  >
-                                    <strong>{`${key.charAt(0).toUpperCase() + key.slice(1)}:`}</strong>{" "}
-                                    {typeof value === "object"
-                                      ? JSON.stringify(isDetailExpanded ? fullValue : value, null, 2)
-                                      : isDetailExpanded ? fullValue : value}
-                                    {canExpand && (
-                                      <button
-                                        className="text-blue-500 ml-2"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          toggleDetailExpand(detailKey);
-                                        }}
-                                      >
-                                        {isDetailExpanded ? "Show Less" : "Show More"}
-                                      </button>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
+                </motion.li>
               );
             })}
           </ul>
