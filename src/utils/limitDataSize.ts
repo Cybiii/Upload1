@@ -1,5 +1,3 @@
-// src/utils/limitDataSize.ts
-
 export const limitDataSize = (
     data: any,
     maxLength = 200,

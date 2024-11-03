@@ -1,6 +1,6 @@
 // src/components/StepsChat/StepsChat.tsx
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { EventSummary, StepsChatProps } from '../../types';
 import EventItem from './EventItem';
 import { processSteps } from './helpers';

@@ -1,6 +1,6 @@
 // src/components/StepsChat/helpers.ts
 
-import { EventType, incrementalData, IncrementalSource } from "../../../index";
+import { EventType, mutationData, incrementalData, IncrementalSource, addedNodeMutation, removedNodeMutation } from "../../../index";
 import { Snapshot, EventSummary } from '../../types/events';
 import { limitDataSize } from '../../utils';
 
@@ -200,7 +200,7 @@ const handleIncrementalData = (
       break;
 
     case IncrementalSource.Mutation:
-      handleMutationData(data, relativeTimestamp, summaries);
+      handleMutationData(data as mutationData, relativeTimestamp, summaries);
       break;
 
     case IncrementalSource.ViewportResize:
@@ -222,13 +222,13 @@ const handleIncrementalData = (
 
 // Handle mutations and add them directly to summaries
 const handleMutationData = (
-  data: incrementalData,
+  data: mutationData,
   relativeTimestamp: number,
   summaries: EventSummary[]
 ) => {
   // Handle additions and removals
   if (data.adds && data.adds.length > 0) {
-    const additionEvents = data.adds.map((add) => {
+    const additionEvents = data.adds.map((add: addedNodeMutation) => {
       const addDataLimited = limitDataSize(
         {
           parentId: add.parentId,
@@ -250,7 +250,7 @@ const handleMutationData = (
   }
 
   if (data.removes && data.removes.length > 0) {
-    const removalEvents = data.removes.map((remove) => {
+    const removalEvents = data.removes.map((remove: removedNodeMutation) => {
       const removeDataLimited = limitDataSize(
         {
           id: remove.id,

@@ -1,6 +1,6 @@
 // src/types/events.ts
 
-import { EventType, incrementalData } from "../../index";
+import { EventType } from "../../index";
 
 export interface Noded {
   id: number;
@@ -48,4 +48,14 @@ export interface EventSummary {
 
 export interface StepsChatProps {
   steps: Snapshot[];
+}
+
+export interface AddedNodeMutation {
+  parentId: number;
+  node: Noded;
+}
+
+export interface RemovedNodeMutation {
+  id: number;
+  parentId: number;
 }
