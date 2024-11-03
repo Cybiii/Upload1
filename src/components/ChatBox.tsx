@@ -94,7 +94,7 @@ const StepsChat: React.FC<StepsChatProps> = ({ steps }) => {
       let count = 0;
       for (const key in data) {
         if (count >= 3) {
-          limitedData["..."] = "Truncated additional properties";
+          limitedData["..."] = "...";
           break;
         }
         limitedData[key] = limitDataSize(data[key], maxLength);

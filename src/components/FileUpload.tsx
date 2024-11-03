@@ -11,7 +11,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onFileUpload }) => {
       const reader = new FileReader();
       reader.onload = () => {
         const jsonData = JSON.parse(reader.result as string);
-        onFileUpload(jsonData); // Pass the JSON data to MainContainer
+        onFileUpload(jsonData);
       };
       reader.readAsText(file);
     }

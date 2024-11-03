@@ -50,37 +50,17 @@ function formatTimestamp(milliseconds: number): string {
   return `${formattedMinutes}:${formattedSeconds}`;
 }
 
-// Utility function to limit data size
-function limitDataSize(data: any, maxLength = 1000): any {
-  if (typeof data === "string") {
-    return data.length > maxLength ? data.substring(0, maxLength) + "..." : data;
-  } else if (Array.isArray(data)) {
-    return data.slice(0, 10).map((item) => limitDataSize(item, maxLength));
-  } else if (typeof data === "object" && data !== null) {
-    const limitedData: any = {};
-    let count = 0;
-    for (const key in data) {
-      if (count >= 10) {
-        limitedData["..."] = "Truncated additional properties";
-        break;
-      }
-      limitedData[key] = limitDataSize(data[key], maxLength);
-      count++;
-    }
-    return limitedData;
-  } else {
-    return data;
-  }
-}
-
 // Process snapshots
 for (let i = 0; i < snapshots.length; i++) {
   const snapshot = snapshots[i];
   const relativeTimestamp = snapshot.timestamp - timestart;
 
+  console.log(`Timestamp: ${formatTimestamp(relativeTimestamp)}`);
+
   // Handle URL changes
   if (snapshot.windowId !== windowId) {
     windowId = snapshot.windowId;
+    console.log(`URL visited ${windowId}`);
     eventSummaries.push({
       type: "URL Visited",
       timestampStart: relativeTimestamp,
@@ -89,6 +69,7 @@ for (let i = 0; i < snapshots.length; i++) {
   }
 
   handleEvent(snapshot, relativeTimestamp);
+  console.log("");
 }
 
 function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
@@ -99,6 +80,7 @@ function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
 
   switch (snapshot.type) {
     case EventType.DomContentLoaded:
+      console.log("DOM content loaded");
       eventSummaries.push({
         type: "DOM Content Loaded",
         timestampStart: relativeTimestamp,
@@ -106,6 +88,7 @@ function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
       break;
 
     case EventType.Load:
+      console.log("Page load");
       eventSummaries.push({
         type: "Page Load",
         timestampStart: relativeTimestamp,
@@ -113,6 +96,7 @@ function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
       break;
 
     case EventType.FullSnapshot:
+      console.log("Full snapshot");
       eventSummaries.push({
         type: "Full Snapshot",
         timestampStart: relativeTimestamp,
@@ -120,34 +104,39 @@ function handleEvent(snapshot: Snapshot, relativeTimestamp: number) {
       break;
 
     case EventType.IncrementalSnapshot:
+      console.log("Incremental snapshot");
       handleIncrementalData(snapshot.data as incrementalData, relativeTimestamp);
       break;
 
     case EventType.Meta:
+      console.log("Meta event");
       eventSummaries.push({
         type: "Meta Event",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(snapshot.data),
+        details: snapshot.data,
       });
       break;
 
     case EventType.Custom:
+      console.log("Custom event");
       eventSummaries.push({
         type: "Custom Event",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(snapshot.data),
+        details: snapshot.data,
       });
       break;
 
     case EventType.Plugin:
+      console.log("Plugin event");
       eventSummaries.push({
         type: "Plugin Event",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(snapshot.data),
+        details: snapshot.data,
       });
       break;
 
     default:
+      console.log("Unknown event");
       eventSummaries.push({
         type: "Unknown Event",
         timestampStart: relativeTimestamp,
@@ -160,15 +149,17 @@ function handleIncrementalData(data: incrementalData, relativeTimestamp: number)
 
   switch (data.source) {
     case IncrementalSource.Mutation:
+      console.log("Mutation");
       eventSummaries.push({
         type: "DOM Mutation",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(data),
+        details: { ...data },
       });
       break;
 
     case IncrementalSource.MouseMove:
     case IncrementalSource.TouchMove:
+      console.log("Mouse Move Data source:", data.source);
       if (lastEvent && lastEvent.type === "Mouse Movement") {
         lastEvent.timestampEnd = relativeTimestamp;
       } else {
@@ -180,14 +171,16 @@ function handleIncrementalData(data: incrementalData, relativeTimestamp: number)
       break;
 
     case IncrementalSource.MouseInteraction:
+      console.log("Mouse Interaction Data id:", data.id);
       eventSummaries.push({
         type: "Mouse Interaction",
         timestampStart: relativeTimestamp,
-        details: limitDataSize({ elementId: data.id, interactionType: data.type }),
+        details: { elementId: data.id, interactionType: data.type },
       });
       break;
 
     case IncrementalSource.Scroll:
+      console.log("Scroll Data:", data);
       if (lastEvent && lastEvent.type === "Scroll") {
         lastEvent.timestampEnd = relativeTimestamp;
       } else {
@@ -199,28 +192,92 @@ function handleIncrementalData(data: incrementalData, relativeTimestamp: number)
       break;
 
     case IncrementalSource.ViewportResize:
+      console.log("Viewport Resize Data:", data);
       eventSummaries.push({
         type: "Viewport Resize",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(data),
+        details: { ...data },
       });
       break;
 
     case IncrementalSource.Input:
+      console.log("Input Data:", data);
       eventSummaries.push({
         type: "Text Input",
         timestampStart: relativeTimestamp,
-        details: limitDataSize(data),
+        details: { ...data },
       });
       break;
 
-    // Add more cases as needed for other event types
+    case IncrementalSource.MediaInteraction:
+      console.log("Media Interaction Data:", data);
+      eventSummaries.push({
+        type: "Media Interaction",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.StyleSheetRule:
+      console.log("Style Sheet Rule", data.id);
+      eventSummaries.push({
+        type: "Style Sheet Rule",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.CanvasMutation:
+      console.log("Canvas Mutation Data:", data);
+      eventSummaries.push({
+        type: "Canvas Mutation",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.Font:
+      console.log("Font Data:", data);
+      eventSummaries.push({
+        type: "Font",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.Drag:
+      console.log("Drag Data:", data);
+      eventSummaries.push({
+        type: "Drag",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.StyleDeclaration:
+      console.log("Style Declaration Data:", data);
+      eventSummaries.push({
+        type: "Style Declaration",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
+
+    case IncrementalSource.AdoptedStyleSheet:
+      console.log("Adopted Style Sheet Data:", data);
+      eventSummaries.push({
+        type: "Adopted Style Sheet",
+        timestampStart: relativeTimestamp,
+        details: { ...data },
+      });
+      break;
 
     default:
+      console.log("Unknown Incremental Data Source");
       eventSummaries.push({
-        type: "Other Incremental Event",
+        type: "Unknown Incremental Event",
         timestampStart: relativeTimestamp,
-        details: limitDataSize({ source: data.source, ...data }),
+        details: { source: data.source, ...data },
       });
   }
 }
