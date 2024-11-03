@@ -18,6 +18,7 @@ const MainContainer: React.FC = () => {
       ) : (
         <p>Please upload an rrweb JSON file to see the event summary.</p>
       )}
+      <p>Made by Sebastian Silva</p>
     </div>
   );
 };
