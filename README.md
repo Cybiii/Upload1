@@ -11,7 +11,7 @@ This project is a React application that allows users to upload an rrweb JSON fi
 
 ## Demo
 
-Live demonstration: [rrweb-jsondemo.vercel.app](rrweb-jsondemo.vercel.app)
+Live demonstration: [rrweb-jsondemo.vercel.app](https://rrweb-jsondemo.vercel.app)
 
 ## Prerequisites
 
